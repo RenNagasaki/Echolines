@@ -1,0 +1,10 @@
+# Keeps the build context small and stops a stale local bin/ from shadowing the container build.
+**/bin/
+**/obj/
+.git/
+.github/
+.claude/
+.vs/
+.idea/
+.env
+*.user

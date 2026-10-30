@@ -1,0 +1,180 @@
+stages:
+  - security
+  - test
+  - analysis
+  - image
+  - deploy
+  - mirror
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+# Secret scan (gitleaks). Runs FIRST, on every branch. If it finds a secret the pipeline stops before
+# the `mirror` stage, so a leaked credential never reaches the public GitHub mirror.
+gitleaks:
+  stage: security
+  image: alpine:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    # Tags too: mirror-to-github `needs` this job, and a tag pipeline without it is rejected outright.
+    - if: $CI_COMMIT_TAG
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    # Bump when a newer gitleaks release is out. If the download 404s, this is the line to fix.
+    GITLEAKS_VERSION: "8.21.2"
+  before_script:
+    # git is NOT in alpine:latest, but `gitleaks detect` shells out to it to walk the history —
+    # without it the job dies with `could not create Git cmd`.
+    - apk add --no-cache curl tar git
+    - curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+    - tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+  script:
+    - gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
+
+# The gate in front of the image. sonarqube below runs the tests too, but with `|| true` (a red test
+# must not hide the analysis) — so it cannot be what stops a broken build from going live.
+test:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+  script:
+    - dotnet build Echolines.sln -c Release
+    - dotnet test Echolines.sln -c Release --no-build
+
+sonarqube:
+  stage: analysis
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  script:
+    - dotnet tool install --global dotnet-sonarscanner
+    - export PATH="$PATH:$HOME/.dotnet/tools"
+    # Coverage exclusions are narrower than they look: .razor is markup with no branch worth asserting
+    # without a component-test harness, Program.cs is host wiring, and Migrations are generated. Every
+    # file that holds a decision — the ingest, promotion, review, import and key services — stays measured.
+    # Project key hardcoded, like the GitHub mirror target below: it is not a secret, it never differs
+    # between branches, and a CI/CD variable for it is one more thing to forget when the repo is cloned.
+    #
+    # ⚠ It is NOT "Echolines". SonarQube projects here are provisioned by the GitLab integration, which
+    # generates the key as echotools_<repo>_<uuid> — Echokraut's is echotools_echokraut_9b9e9dc6-… for
+    # the same reason. Only the provisioned project carries the permissions the CI token holds; a
+    # hand-created project with a tidy name answers 403 (Forbidden) to that token and fails the job
+    # before it analyses a single line.
+    - >
+      dotnet sonarscanner begin /key:"echotools_echolines_752836cc-9f0e-42e8-a523-2af591d96d44"
+      /d:sonar.host.url="$SONAR_HOST_URL" /d:sonar.token="$SONAR_TOKEN"
+      /d:sonar.exclusions="**/Migrations/**"
+      /d:sonar.coverage.exclusions="**/*.razor,**/Program.cs,**/Migrations/**"
+      /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml"
+    - dotnet build Echolines.sln
+    - dotnet test Echolines.sln --no-build --collect:"XPlat Code Coverage;Format=opencover" --results-directory TestResults || true
+    - dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+# The image the cluster runs (registry.echotools.cloud/echotools/echolines). Kaniko, not docker-in-docker:
+# the runner is a Kubernetes executor, where dind needs a privileged runner and job and service share
+# no Docker socket — same as Ohrenzeuge and echoshell.
+#
+# Tags:  main          → :<short-sha> and :latest   (the cluster pins latest@sha256)
+#        tag v1.2.3    → :<short-sha> and :v1.2.3    (latest stays where main put it)
+#        other branch  → built, not pushed
+# There is no public image (GHCR build dropped 2026-10-30); self-hosters build from source via compose.
+#
+# `needs` instead of waiting for the whole analysis stage: a SonarQube outage (it sits in
+# DB_MIGRATION_NEEDED after every update) must not hold back a deploy.
+build:image:
+  stage: image
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]   # the image would start the executor directly; GitLab needs a shell
+  needs: ["gitleaks", "test"]
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+  before_script:
+    # Kaniko reads credentials from a Docker config, there is no `docker login`.
+    - mkdir -p /kaniko/.docker
+    - |
+      AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        TARGET="--destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+      elif [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        TARGET="--destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA --destination $CI_REGISTRY_IMAGE:latest"
+      else
+        TARGET="--no-push"
+        echo "Neither the default branch nor a tag: building only."
+      fi
+    # Layer cache in the registry: the restore layer survives as long as the .csproj files do not change.
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --cache=true --cache-repo "$CI_REGISTRY_IMAGE/cache"
+      --label "org.opencontainers.image.source=$CI_PROJECT_URL"
+      --label "org.opencontainers.image.revision=$CI_COMMIT_SHA"
+      $TARGET
+
+# Deploys right away instead of waiting for the weekly Renovate run: the cluster repo
+# (private/proxmox-cluster) pins `latest@sha256:…`; this starts its Renovate pipeline, Renovate merges
+# the new digest without an MR and ArgoCD rolls it out within minutes. Default branch only — a tag
+# does not move :latest.
+#
+# CI_JOB_TOKEN only works while private/proxmox-cluster lists this project in its job token allowlist
+# (Settings > CI/CD > Job token permissions). Otherwise 403, and `curl -f` turns the job red instead of
+# swallowing it.
+deploy:cluster:
+  stage: deploy
+  image: curlimages/curl:8.11.1
+  needs: ["build:image"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - curl -sf -o /dev/null -X POST
+      -F token=$CI_JOB_TOKEN
+      -F ref=main
+      "https://gitlab.echotools.cloud/api/v4/projects/private%2Fproxmox-cluster/trigger/pipeline"
+
+mirror-to-github:
+  stage: mirror
+  image: alpine/git:latest
+  # Snapshot mirror, as for Echokraut: GitHub only ever sees the CURRENT state of main as a single
+  # parentless commit — no development history. Every push replaces that commit.
+  #
+  # `needs: gitleaks` only: the secret scan is what must pass before anything reaches the public
+  # mirror. Tests and the image do not gate it.
+  #
+  # Scope, so nobody expects more than this delivers:
+  #   * Only `main` and tag pipelines mirror. Feature branches stay on GitLab; branches already on
+  #     GitHub from the old full mirror are left alone (deleting them is a deliberate, manual act).
+  #   * Tags that already exist on GitHub still point at the OLD full history, which stays reachable
+  #     through them. This job makes future pushes history-free; it unpublishes nothing.
+  needs: ["gitleaks"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+  script:
+    - git config --global user.email "ci@echotools.cloud"
+    - git config --global user.name "Echolines CI"
+    # --orphan keeps the index, so committing right away reproduces the exact tree of this pipeline's
+    # commit with no parent.
+    - git checkout --orphan snapshot
+    - git commit -q -m "Echolines ${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+    # Target path is hardcoded — the GitHub repo lives under RenNagasaki, but ${GITHUB_USER} is the CI
+    # auth identity and may differ. Using ${GITHUB_USER} on both sides routed the push to the wrong
+    # repo and triggered 403s on Echokraut.
+    - git remote add github "https://${GITHUB_USER}:${GITHUB_PAT}@github.com/RenNagasaki/Echolines.git"
+    # Force is inherent to the design: each snapshot is unrelated to the last.
+    - if [ -n "$CI_COMMIT_BRANCH" ]; then git push github snapshot:main --force; fi
+    # Tag pipelines: point the tag at the snapshot so a release never drags the full history back onto
+    # GitHub. NON-force: an existing GitHub tag (e.g. cut via the Release UI) is never silently
+    # overwritten — a collision is resolved by hand.
+    - if [ -n "$CI_COMMIT_TAG" ]; then git tag -f "$CI_COMMIT_TAG" && git push github "refs/tags/$CI_COMMIT_TAG"; fi

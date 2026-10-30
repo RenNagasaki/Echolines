@@ -1,0 +1,47 @@
+# Reference deployment. Run from the repository root: there is no published image, compose builds it
+# from the source next to this file. Copy .env.example to .env, fill it in, `docker compose up -d`.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: echolines
+      POSTGRES_USER: echolines
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - echolines-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echolines"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    # The tag the build gets, so `docker run … echolines hash-password` below finds it.
+    image: echolines
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Default: "Host=db;Database=echolines;Username=echolines;Password=${POSTGRES_PASSWORD}"
+
+      # PBKDF2 hash of the single operator password. Generate it without this stack, because a
+      # compose service cannot produce the value its own definition demands:
+      #   docker compose build server && docker run --rm -it echolines hash-password
+      # Empty refuses every login rather than allowing every login.
+      Admin__PasswordHash: ${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
+
+      # Set to true when something terminates TLS in front of this container. Without it every client
+      # shares one rate-limit bucket and the admin cookie never gets its Secure flag. Leave it false
+      # when the port below is reachable directly — otherwise a caller can forge X-Forwarded-For and
+      # walk around the rate limit.
+      Server__BehindReverseProxy: ${BEHIND_REVERSE_PROXY:-false}
+    ports:
+      # Bind to localhost when a reverse proxy is in front, so the plain-HTTP port is not public:
+      #   "127.0.0.1:8080:8080"
+      - "${BIND_ADDRESS:-0.0.0.0}:8080:8080"
+
+volumes:
+  echolines-data:

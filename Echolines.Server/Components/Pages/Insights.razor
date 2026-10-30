@@ -1,0 +1,155 @@
+@page "/admin/insights"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ILineReviewService Review
+
+<PageTitle>Insights — Echolines</PageTitle>
+
+<h1>Insights</h1>
+
+<p class="hint">
+    This page is the point of the whole build: it answers, permanently and by itself, what the
+    extraction still misses. The answer comes from inside the database — every vote records where it
+    came from — so it cannot go stale with a game patch the way a frozen reference stock would.
+</p>
+
+@if (_counts is not null)
+{
+    <div class="counts">
+        <div><strong>@_counts.Lines</strong><span>public lines</span></div>
+        <div><strong>@_counts.HarvestGap</strong><span>harvest gap</span></div>
+        <div><strong>@_counts.NeverEncountered</strong><span>never encountered</span></div>
+        <div><strong>@_counts.OperatorOnly</strong><span>Drive import only</span></div>
+        <div><strong>@_counts.Pending</strong><span>in quarantine</span></div>
+        <div><strong>@_counts.Rejected</strong><span>turned down</span></div>
+    </div>
+}
+
+<div class="filters">
+    <select @bind="_view" @bind:after="Reload">
+        <option value="@LineView.HarvestGap">Harvest gap — seen live, never harvested</option>
+        <option value="@LineView.NeverEncountered">Never encountered — harvested, never seen live</option>
+        <option value="@LineView.OperatorOnly">Drive import only — nothing known</option>
+        <option value="@LineView.All">All public lines</option>
+    </select>
+
+    <select @bind="_lang" @bind:after="Reload">
+        <option value="">All languages</option>
+        @foreach (var lang in LineLimits.Languages)
+        {
+            <option value="@lang">@lang</option>
+        }
+    </select>
+
+    <input placeholder="NPC" @bind="_npc" @bind:event="oninput" @bind:after="Reload" />
+    <input placeholder="Text contains" @bind="_text" @bind:event="oninput" @bind:after="Reload" />
+</div>
+
+<p class="hint">@Explanation(_view)</p>
+
+@if (_page is null)
+{
+    <p>Loading…</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Lang</th>
+            <th>NPC</th>
+            <th>Text</th>
+            <th>Sources</th>
+            <th>Origins</th>
+            <th>Last seen</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var line in _page.Items)
+        {
+            <tr>
+                <td>@line.Lang</td>
+                <td>@line.NpcName</td>
+                <td class="text">@line.Text</td>
+                <td>@line.SourceCount</td>
+                <td>@Origins(line)</td>
+                <td>@line.LastSeenUtc.ToString("yyyy-MM-dd")</td>
+            </tr>
+        }
+        </tbody>
+        </table>
+
+    @if (_page.Items.Count == 0)
+    {
+        <p class="hint">Nothing here.</p>
+    }
+
+    <Pager Page="_page.PageIndex" PageCount="_page.PageCount" OnGoto="GoTo" />
+}
+
+@code {
+    private const int PageSize = 50;
+
+    private Page<Line>? _page;
+    private InsightCounts? _counts;
+
+    private LineView _view = LineView.HarvestGap;
+    private string _lang = "";
+    private string _npc = "";
+    private string _text = "";
+    private int _pageIndex;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _counts = await Review.GetCountsAsync();
+        await Load();
+    }
+
+    private async Task Load() =>
+        _page = await Review.QueryLinesAsync(new LineFilter
+        {
+            View = _view,
+            Lang = string.IsNullOrWhiteSpace(_lang) ? null : _lang,
+            Npc = _npc,
+            Text = _text,
+            PageIndex = _pageIndex,
+            PageSize = PageSize,
+        });
+
+    private async Task Reload()
+    {
+        _pageIndex = 0;
+        await Load();
+    }
+
+    private async Task GoTo(int index)
+    {
+        _pageIndex = index;
+        await Load();
+    }
+
+    private static string Origins(Line line)
+    {
+        if (line.OriginOperator && !line.SeenLive && !line.SeenHarvest)
+            return "operator";
+
+        return (line.SeenLive, line.SeenHarvest) switch
+        {
+            (true, true) => "live + harvest",
+            (true, false) => "live",
+            (false, true) => "harvest",
+            _ => "—",
+        };
+    }
+
+    private static string Explanation(LineView view) => view switch
+    {
+        LineView.HarvestGap =>
+            "A player met this line in game and no harvest has ever delivered it. These are the gaps in the extraction.",
+        LineView.NeverEncountered =>
+            "The line exists in the game files but nobody has run into it — dead content, an unused line, or a patch's advance data.",
+        LineView.OperatorOnly =>
+            "Imported from the old Google Drive stock. It has no vote behind it, so nothing is known about whether it is live or in the files.",
+        _ => "Everything that has made it into the public stock.",
+    };
+}

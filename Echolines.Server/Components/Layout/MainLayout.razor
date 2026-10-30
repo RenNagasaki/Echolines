@@ -1,0 +1,24 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <header>
+        <a class="brand" href="/admin">Echolines</a>
+        <AuthorizeView>
+            <Authorized>
+                <nav>
+                    <NavLink href="/admin" Match="NavLinkMatch.All">Quarantine</NavLink>
+                    <NavLink href="/admin/insights">Insights</NavLink>
+                    <NavLink href="/admin/import">Drive import</NavLink>
+                </nav>
+                <form method="post" action="@AdminEndpoints.SignOutPath" class="logout">
+                    <AntiforgeryToken />
+                    <button type="submit" class="link">Sign out</button>
+                </form>
+            </Authorized>
+        </AuthorizeView>
+    </header>
+
+    <main>
+        @Body
+    </main>
+</div>

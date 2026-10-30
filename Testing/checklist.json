@@ -1,0 +1,276 @@
+{
+  "plugin": "Echolines",
+  "version": "0.1.0.0",
+  "intro": "Echolines is the server component behind Echokraut's community line database. There is no plugin to install here — everything below is tested against a running Echolines instance, with Echokraut as the client. If you are testing the Echokraut side (the reporting switch, the changelog wording), use the Echokraut checklist instead.",
+  "components": [
+    {
+      "name": "Server",
+      "sections": [
+        {
+          "title": "Deployment",
+          "items": [
+            {
+              "id": "dep-compose",
+              "text": "docker compose up brings both containers up and the server stays running",
+              "hint": "You need a .env with POSTGRES_PASSWORD and ADMIN_PASSWORD_HASH; without them compose refuses to start, which is intended.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "dep-migrate",
+              "text": "The database schema is created on first start without any manual step",
+              "hint": "The server migrates on startup. Check the log for the migration and that the tables lines, pending_lines and pending_votes exist.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "dep-health",
+              "text": "GET /healthz answers 200",
+              "new": true
+            },
+            {
+              "id": "dep-restart",
+              "text": "Restarting the containers keeps all data",
+              "hint": "The Postgres volume must survive a restart. Report a line, restart, and check it is still there.",
+              "new": true,
+              "critical": true
+            }
+          ]
+        },
+        {
+          "title": "Reporting endpoints",
+          "items": [
+            {
+              "id": "api-live-200",
+              "text": "POST /v1/lines answers 200 for a new line and for one already known",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-quarantine",
+              "text": "A newly reported line lands in the quarantine list, not in the public stock",
+              "hint": "Check under /admin — it should show up under Pending with one vote.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-narrator",
+              "text": "Quest text with no speaker is accepted and shows up under SYSTEM",
+              "hint": "Narrator lines are a large part of the game's dialogue. The live path sends an empty speaker, the harvest sends 'Narrator'/'Erzähler' — both must land on the SAME entry, otherwise neither ever reaches three votes.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-consensus",
+              "text": "The same line reported by three different installations is promoted on the third",
+              "hint": "Use three different installId GUIDs. After the second nothing should be public yet; after the third it appears in Insights.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-onevote",
+              "text": "The same installation reporting a line ten times does not promote it",
+              "hint": "This is the whole point of the staging table — one installation is one vote, however often it sends.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-import",
+              "text": "POST /v1/lines/import accepts a chunk of up to 1000 lines and puts them in quarantine",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "api-import-repeat",
+              "text": "Sending the same import chunk twice changes nothing the second time",
+              "hint": "Vote counts must not go up. A client that restarts a harvest after an abort has to be harmless.",
+              "new": true
+            },
+            {
+              "id": "api-toobig",
+              "text": "An oversized batch answers 400 and stores nothing",
+              "new": true
+            },
+            {
+              "id": "api-429",
+              "text": "Hammering an endpoint eventually answers 429, never 500",
+              "new": true
+            },
+            {
+              "id": "api-noerror-ingame",
+              "text": "None of the above ever produces a message, popup or error inside FFXIV",
+              "hint": "Test with Echokraut pointed at a stopped server too — the client must stay silent.",
+              "new": true,
+              "critical": true
+            }
+          ]
+        },
+        {
+          "title": "Privacy",
+          "items": [
+            {
+              "id": "priv-payload",
+              "text": "A captured request contains only line, language, NPC and the installation GUID",
+              "hint": "No character name, no world, no account, no play time, no file paths. Capture the actual traffic, do not take the docs' word for it.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "priv-token",
+              "text": "The dialogue text arrives with the character name already replaced by a placeholder",
+              "hint": "Talk to an NPC that says your name and check what the request body contains.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "priv-optout",
+              "text": "With reporting switched off in Echokraut, no request is sent at all",
+              "new": true,
+              "critical": true
+            }
+          ]
+        },
+        {
+          "title": "Admin UI",
+          "items": [
+            {
+              "id": "adm-locked",
+              "text": "/admin, /admin/insights and /admin/import redirect to the login when signed out",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-login",
+              "text": "The right password signs in, a wrong one does not",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-login-no500",
+              "text": "Signing in never answers a server error, with any password",
+              "hint": "A 500 here means the sign-in handler collides with the login page route. It looks identical for a right and a wrong password, so try both.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-nohash",
+              "text": "With no ADMIN_PASSWORD_HASH set, every login is refused and the page says so",
+              "hint": "It must fail closed. An empty hash must never mean 'no password needed'.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-bruteforce",
+              "text": "Repeated wrong passwords start answering 429",
+              "new": true
+            },
+            {
+              "id": "adm-release",
+              "text": "Releasing a quarantined entry moves it into the public stock",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-reject",
+              "text": "A turned-down entry leaves the list and does not come back when reported again",
+              "hint": "Report the same line again from a new installation afterwards. It must stay out of the pending list.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-interactive",
+              "text": "The page actually reacts: ticking a checkbox enables the Release and Turn down buttons",
+              "hint": "If nothing reacts anywhere, the Blazor circuit is not running — check that /_framework/blazor.web.js answers 200 and that the reverse proxy forwards WebSockets to /_blazor. A bar along the bottom of the page reports a lost connection.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "adm-bulk",
+              "text": "Multi-select works and the selection resets when a filter changes",
+              "new": true
+            },
+            {
+              "id": "adm-release-all",
+              "text": "\"Release all N\" asks for confirmation first, then releases every pending entry in the current filter, not just the visible page",
+              "hint": "Set a filter (e.g. one language), press Release all, confirm. The count in the question must match the filter, entries outside it must stay pending, and the button must not appear in the Rejected or Promoted view. Changing a filter while the question is open must withdraw it.",
+              "new": true
+            },
+            {
+              "id": "adm-filters",
+              "text": "Language, NPC, text and vote-count filters all narrow the list correctly",
+              "new": true
+            },
+            {
+              "id": "adm-paging",
+              "text": "With more entries than fit on one page, paging shows each entry exactly once",
+              "new": true
+            }
+          ]
+        },
+        {
+          "title": "Insights",
+          "items": [
+            {
+              "id": "ins-gap",
+              "text": "A line reported live but never harvested shows up under 'harvest gap'",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "ins-catchup",
+              "text": "A line promoted by harvests moves out of 'never encountered' as soon as a player reports it",
+              "hint": "This is the case the design got wrong once. Promote via three harvest reports, then send one live report and re-check the view.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "ins-counts",
+              "text": "The counters at the top match what the lists below actually contain",
+              "new": true
+            }
+          ]
+        },
+        {
+          "title": "Drive import",
+          "items": [
+            {
+              "id": "imp-confirm",
+              "text": "Picking files does not import anything until the Import button is pressed",
+              "hint": "The selection is listed first and the button names the file count. This import writes straight into the public table, so an accidental click must not be enough.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "imp-many",
+              "text": "Selecting many .json files at once imports them into the public stock",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "imp-zip",
+              "text": "A .zip of the same files imports identically",
+              "new": true
+            },
+            {
+              "id": "imp-known",
+              "text": "Importing the same stock twice reports the second run as 'already known'",
+              "new": true
+            },
+            {
+              "id": "imp-conflict",
+              "text": "A file whose text does not match the slug in its own name is listed as a conflict and not imported",
+              "hint": "Usually this means the body still holds a real character name. It must never reach the database. Characters that were substituted on the way into Drive — an apostrophe stored as '_' — are NOT a conflict and must import normally; check a line with an apostrophe in it.",
+              "new": true,
+              "critical": true
+            },
+            {
+              "id": "imp-name-wins",
+              "text": "Language, gender and race come from the file name, not from the numbers in the JSON body",
+              "new": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
