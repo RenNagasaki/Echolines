@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="app.css" />
+    <!-- Nothing here is worth indexing, and an admin surface has no business in a search result. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Echolines</title>
+    <HeadOutlet />
+</head>
+<body>
+    <Routes />
+
+    @* Blazor unhides this itself when the circuit fails or drops. Without it the page just stops
+       responding to clicks with no explanation — which is exactly how a proxy that does not forward
+       the /_blazor WebSocket presents itself: everything renders, nothing reacts. *@
+    <div id="blazor-error-ui">
+        The connection to the server was lost, so nothing on this page will respond.
+        <a href="" class="reload">Reload</a>
+        <span class="dismiss">🗙</span>
+    </div>
+
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+@* Both lists are over tables that never shrink, so every view is paginated from day one. *@
+
+@if (PageCount > 1)
+{
+    <div class="pager">
+        <button disabled="@(Page == 0)" @onclick="() => OnGoto.InvokeAsync(Page - 1)">‹ Prev</button>
+        <span>Page @(Page + 1) of @PageCount</span>
+        <button disabled="@(Page >= PageCount - 1)" @onclick="() => OnGoto.InvokeAsync(Page + 1)">Next ›</button>
+    </div>
+}
+
+@code {
+    [Parameter] public int Page { get; set; }
+    [Parameter] public int PageCount { get; set; }
+    [Parameter] public EventCallback<int> OnGoto { get; set; }
+}

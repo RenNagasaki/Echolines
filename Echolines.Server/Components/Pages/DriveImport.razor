@@ -1,0 +1,133 @@
+@page "/admin/import"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject IDriveImportService Importer
+
+<PageTitle>Drive import — Echolines</PageTitle>
+
+<h1>Drive import</h1>
+
+<p class="hint">
+    Reads the old "one JSON file per line" Google Drive stock into the main table. This material is the
+    operator's own, so it skips quarantine. Select many <code>.json</code> files at once, or a single
+    <code>.zip</code> containing them.
+</p>
+
+<p class="hint">
+    The <em>file name</em> is authoritative, not the JSON body: the body serialised Gender, Race and
+    Language as bare numbers, so an enum that was reordered since would point at the wrong value today.
+    Only <code>Text</code> is taken from the body, and a line whose text does not reproduce the slug in
+    its own file name goes into the conflict list instead of being guessed at.
+</p>
+
+@* Selecting files does NOT start the import. This writes straight into the public table, bypassing
+   quarantine, so there has to be a moment where the operator can look at what they picked and back
+   out — "clicked a file, thousands of rows went live" is not a recoverable mistake. *@
+<div class="filters">
+    <InputFile OnChange="OnSelected" multiple accept=".json,.zip" disabled="@_busy" />
+
+    <button disabled="@(_selected.Count == 0 || _busy)" @onclick="Import">
+        @(_selected.Count == 0 ? "Import" : $"Import {_selected.Count} file(s)")
+    </button>
+
+    @if (_selected.Count > 0 && !_busy)
+    {
+        <button @onclick="ClearSelection">Clear</button>
+    }
+</div>
+
+@if (_selected.Count > 0 && !_busy)
+{
+    <p class="hint">
+        Selected: @string.Join(", ", _selected.Take(FilesListed).Select(f => f.Name))@(_selected.Count > FilesListed ? $" … and {_selected.Count - FilesListed} more" : "")
+    </p>
+}
+
+@if (_busy)
+{
+    <p>Importing @_selected.Count file(s)… this is not a background job, leave the page open.</p>
+}
+
+@if (_report is not null)
+{
+    <div class="counts">
+        <div><strong>@_report.Imported</strong><span>imported</span></div>
+        <div><strong>@_report.AlreadyKnown</strong><span>already known</span></div>
+        <div><strong>@_report.Failed</strong><span>conflicts</span></div>
+    </div>
+
+    @if (_report.Conflicts.Count > 0)
+    {
+        <h2>Conflicts</h2>
+        <p class="hint">
+            Nothing was imported for these. A slug mismatch usually means the body still holds a real
+            character name that the file name had already replaced with a placeholder — which is
+            precisely what must not reach a public table.
+        </p>
+        <table>
+            <thead><tr><th>File</th><th>Reason</th></tr></thead>
+            <tbody>
+            @foreach (var conflict in _report.Conflicts.Take(ConflictsShown))
+            {
+                <tr><td>@conflict.FileName</td><td>@conflict.Reason</td></tr>
+            }
+            </tbody>
+        </table>
+        @if (_report.Conflicts.Count > ConflictsShown)
+        {
+            <p class="hint">…and @(_report.Conflicts.Count - ConflictsShown) more.</p>
+        }
+    }
+}
+
+@if (_error is not null)
+{
+    <p class="error">@_error</p>
+}
+
+@code {
+    private const int ConflictsShown = 200;
+    private const int FilesListed = 5;
+
+    private IReadOnlyList<IBrowserFile> _selected = [];
+    private DriveImportReport? _report;
+    private string? _error;
+    private bool _busy;
+
+    private void OnSelected(InputFileChangeEventArgs e)
+    {
+        _selected = e.GetMultipleFiles(DriveUploadReader.MaxFiles);
+        _report = null;
+        _error = null;
+    }
+
+    private void ClearSelection() => _selected = [];
+
+    private async Task Import()
+    {
+        if (_selected.Count == 0)
+            return;
+
+        _busy = true;
+        _report = null;
+        _error = null;
+
+        try
+        {
+            await using var bundle = await DriveUploadReader.ReadAsync(_selected);
+            _report = await Importer.ImportAsync(bundle.Items);
+            _selected = [];
+        }
+        catch (Exception ex)
+        {
+            // Whatever went wrong — an oversized archive, a corrupt zip, a dropped connection — belongs
+            // on the page, not in a 500 that loses the operator's whole selection. The selection is
+            // kept on failure so a retry does not mean picking every file again.
+            _error = $"Import failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

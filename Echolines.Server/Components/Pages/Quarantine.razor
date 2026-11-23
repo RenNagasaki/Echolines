@@ -1,0 +1,246 @@
+@page "/admin"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ILineReviewService Review
+
+<PageTitle>Quarantine — Echolines</PageTitle>
+
+<h1>Quarantine</h1>
+
+<p class="hint">
+    Lines that no three separate installations have reported yet. Entries that never reach the
+    threshold — side content, old seasonal events, rare NPCs, the less common languages — are exactly
+    the interesting material and only leave this list by being released or turned down here.
+</p>
+
+<div class="filters">
+    <select @bind="_state" @bind:after="Reload">
+        <option value="@PendingState.Pending">Pending</option>
+        <option value="@PendingState.Rejected">Rejected</option>
+        <option value="@PendingState.Promoted">Promoted</option>
+    </select>
+
+    <select @bind="_lang" @bind:after="Reload">
+        <option value="">All languages</option>
+        @foreach (var lang in LineLimits.Languages)
+        {
+            <option value="@lang">@lang</option>
+        }
+    </select>
+
+    <input placeholder="NPC" @bind="_npc" @bind:event="oninput" @bind:after="Reload" />
+    <input placeholder="Text contains" @bind="_text" @bind:event="oninput" @bind:after="Reload" />
+
+    <select @bind="_minVotes" @bind:after="Reload">
+        <option value="0">Any vote count</option>
+        <option value="1">1+</option>
+        <option value="2">2+</option>
+    </select>
+
+    <select @bind="_sort" @bind:after="Reload">
+        <option value="@PendingSort.NewestFirst">Newest first</option>
+        <option value="@PendingSort.OldestFirst">Oldest first</option>
+        <option value="@PendingSort.MostVotes">Most votes</option>
+    </select>
+</div>
+
+@if (_page is null)
+{
+    <p>Loading…</p>
+}
+else
+{
+    <div class="bulk">
+        <span>@_selected.Count selected of @_page.Total in this filter</span>
+        <button disabled="@(_selected.Count == 0 || _busy)" @onclick="Approve">Release</button>
+        <button disabled="@(_selected.Count == 0 || _busy)" @onclick="Reject">Turn down</button>
+        @if (_state == PendingState.Pending)
+        {
+            @if (_confirmAll)
+            {
+                <span class="error">Release all @_page.Total.ToString("N0") entries in this filter? This cannot be undone.</span>
+                <button disabled="@_busy" @onclick="ApproveAll">Yes, release all</button>
+                <button disabled="@_busy" @onclick="CancelApproveAll">Cancel</button>
+            }
+            else
+            {
+                <button disabled="@(_page.Total == 0 || _busy)" @onclick="AskApproveAll">Release all @_page.Total.ToString("N0")</button>
+            }
+        }
+        @if (_message is not null)
+        {
+            <span class="ok">@_message</span>
+        }
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th><input type="checkbox" checked="@AllOnPageSelected" @onchange="ToggleAllOnPage" /></th>
+            <th>Lang</th>
+            <th>NPC</th>
+            <th>Text</th>
+            <th>Votes</th>
+            <th>Origins</th>
+            <th>First seen</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var entry in _page.Items)
+        {
+            <tr>
+                <td>
+                    <input type="checkbox"
+                           checked="@_selected.Contains(entry.Id)"
+                           @onchange="e => Select(entry.Id, (bool?)e.Value == true)" />
+                </td>
+                <td>@entry.Lang</td>
+                <td>@entry.NpcName</td>
+                <td class="text">@entry.Text</td>
+                <td>@entry.HitCount</td>
+                <td>@Origins(entry)</td>
+                <td>@entry.FirstSeenUtc.ToString("yyyy-MM-dd")</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    @if (_page.Items.Count == 0)
+    {
+        <p class="hint">Nothing here.</p>
+    }
+
+    <Pager Page="_page.PageIndex" PageCount="_page.PageCount" OnGoto="GoTo" />
+}
+
+@code {
+    private const int PageSize = 50;
+
+    private Page<PendingLine>? _page;
+    private readonly HashSet<int> _selected = [];
+
+    private PendingState _state = PendingState.Pending;
+    private string _lang = "";
+    private string _npc = "";
+    private string _text = "";
+    private int _minVotes;
+    private PendingSort _sort = PendingSort.NewestFirst;
+    private int _pageIndex;
+    private bool _busy;
+    private bool _confirmAll;
+    private string? _message;
+
+    protected override Task OnInitializedAsync() => Load();
+
+    private bool AllOnPageSelected =>
+        _page is { Items.Count: > 0 } && _page.Items.All(i => _selected.Contains(i.Id));
+
+    private PendingFilter CurrentFilter() => new()
+    {
+        State = _state,
+        Lang = string.IsNullOrWhiteSpace(_lang) ? null : _lang,
+        Npc = _npc,
+        Text = _text,
+        MinVotes = _minVotes,
+        Sort = _sort,
+        PageIndex = _pageIndex,
+        PageSize = PageSize,
+    };
+
+    private async Task Load()
+    {
+        _page = await Review.QueryPendingAsync(CurrentFilter());
+    }
+
+    private async Task Reload()
+    {
+        // Any filter change invalidates both the page number and the selection — carrying a selection
+        // across a filter change is how you release something you never looked at.
+        _pageIndex = 0;
+        _selected.Clear();
+        _confirmAll = false;
+        await Load();
+    }
+
+    private async Task GoTo(int index)
+    {
+        _pageIndex = index;
+        await Load();
+    }
+
+    private void Select(int id, bool selected)
+    {
+        if (selected) _selected.Add(id);
+        else _selected.Remove(id);
+    }
+
+    private void ToggleAllOnPage(ChangeEventArgs e)
+    {
+        if (_page is null) return;
+
+        if ((bool?)e.Value == true)
+            foreach (var item in _page.Items) _selected.Add(item.Id);
+        else
+            foreach (var item in _page.Items) _selected.Remove(item.Id);
+    }
+
+    private Task Approve() => Act(Review.ApproveAsync, "released");
+
+    private Task Reject() => Act(Review.RejectAsync, "turned down");
+
+    // Two steps on purpose: one stray click must not publish a six-figure quarantine.
+    private void AskApproveAll() => _confirmAll = true;
+
+    private void CancelApproveAll() => _confirmAll = false;
+
+    private async Task ApproveAll()
+    {
+        _busy = true;
+        _confirmAll = false;
+        try
+        {
+            var count = await Review.ApproveAllAsync(CurrentFilter(), done =>
+            {
+                _message = $"{done:N0} released so far…";
+                StateHasChanged();
+            });
+            _message = $"{count:N0} released.";
+            _selected.Clear();
+            _pageIndex = 0;
+            await Load();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task Act(Func<IReadOnlyCollection<int>, CancellationToken, Task<int>> action, string verb)
+    {
+        _busy = true;
+        try
+        {
+            var count = await action([.. _selected], CancellationToken.None);
+            _message = $"{count} {verb}.";
+            _selected.Clear();
+            await Load();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Origins(PendingLine entry)
+    {
+        var live = entry.Votes.Any(v => v.Origin == LineOrigin.Live);
+        var harvest = entry.Votes.Any(v => v.Origin == LineOrigin.Harvest);
+        return (live, harvest) switch
+        {
+            (true, true) => "live + harvest",
+            (true, false) => "live",
+            (false, true) => "harvest",
+            _ => "—",
+        };
+    }
+}

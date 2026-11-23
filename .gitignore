@@ -1,0 +1,16 @@
+.vs/
+.idea/
+obj/
+bin/
+*.user
+*.suo
+
+# Machine-local worklog (see the global CLAUDE.md 'Worklog' rule).
+.claude/WORKLOG.md
+
+# Local secrets for docker-compose.
+.env
+
+# SonarQube-Scan-Artefakte
+TestResults/
+.sonarqube/

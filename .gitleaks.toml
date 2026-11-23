@@ -1,0 +1,17 @@
+# gitleaks config for the CI secret scan (see the `gitleaks` job in .gitlab-ci.yml).
+# Extends gitleaks' built-in rule set and adds project-specific allowlists.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project allowlist"
+paths = [
+  # Example/placeholder secret files ship dummy values by design.
+  '''.*\.example$''',
+]
+regexes = [
+  # appsettings.json ships an empty Password= so the shape of the connection string is
+  # documented. The real one arrives through ConnectionStrings__Default at runtime.
+  '''Password=(?:"|$)''',
+]
